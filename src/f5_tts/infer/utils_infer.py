@@ -29,9 +29,6 @@ _ref_audio_cache = {}
 
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
-vocos = Vocos.from_pretrained("charactr/vocos-mel-24khz")
-
-
 # -----------------------------------------
 
 target_sample_rate = 24000
@@ -177,19 +174,41 @@ def load_model(model_cls, model_cfg, ckpt_path, vocab_file="", ode_method=ode_me
 # preprocess reference audio and text
 
 
-def preprocess_ref_audio_text(ref_audio_orig, ref_text, show_info=print, device=device):
+def preprocess_ref_audio_text(ref_audio_orig, ref_text, clip_short=True, show_info=print, device=device):
     show_info("Converting audio...")
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         aseg = AudioSegment.from_file(ref_audio_orig)
 
-        non_silent_segs = silence.split_on_silence(aseg, min_silence_len=1000, silence_thresh=-50, keep_silence=1000)
-        non_silent_wave = AudioSegment.silent(duration=0)
-        for non_silent_seg in non_silent_segs:
-            if len(non_silent_wave) > 10000 and len(non_silent_wave + non_silent_seg) > 18000:
-                show_info("Audio is over 18s, clipping short.")
-                break
-            non_silent_wave += non_silent_seg
-        aseg = non_silent_wave
+        if clip_short:
+            # 1. try to find long silence for clipping
+            non_silent_segs = silence.split_on_silence(
+                aseg, min_silence_len=1000, silence_thresh=-50, keep_silence=1000
+            )
+            non_silent_wave = AudioSegment.silent(duration=0)
+            for non_silent_seg in non_silent_segs:
+                if len(non_silent_wave) > 6000 and len(non_silent_wave + non_silent_seg) > 15000:
+                    show_info("Audio is over 15s, clipping short. (1)")
+                    break
+                non_silent_wave += non_silent_seg
+
+            # 2. try to find short silence for clipping if 1. failed
+            if len(non_silent_wave) > 15000:
+                non_silent_segs = silence.split_on_silence(
+                    aseg, min_silence_len=100, silence_thresh=-40, keep_silence=1000
+                )
+                non_silent_wave = AudioSegment.silent(duration=0)
+                for non_silent_seg in non_silent_segs:
+                    if len(non_silent_wave) > 6000 and len(non_silent_wave + non_silent_seg) > 15000:
+                        show_info("Audio is over 15s, clipping short. (2)")
+                        break
+                    non_silent_wave += non_silent_seg
+
+            aseg = non_silent_wave
+
+            # 3. if no proper silence found for clipping
+            if len(aseg) > 15000:
+                aseg = aseg[:15000]
+                show_info("Audio is over 15s, clipping short. (3)")
 
         aseg.export(f.name, format="wav")
         ref_audio = f.name
@@ -241,6 +260,7 @@ def infer_process(
     ref_text,
     gen_text,
     model_obj,
+    vocoder,
     show_info=print,
     progress=tqdm,
     target_rms=target_rms,
@@ -265,6 +285,7 @@ def infer_process(
         ref_text,
         gen_text_batches,
         model_obj,
+        vocoder,
         progress=progress,
         target_rms=target_rms,
         cross_fade_duration=cross_fade_duration,
@@ -285,6 +306,7 @@ def infer_batch_process(
     ref_text,
     gen_text_batches,
     model_obj,
+    vocoder,
     progress=tqdm,
     target_rms=0.1,
     cross_fade_duration=0.15,
@@ -340,7 +362,7 @@ def infer_batch_process(
         generated = generated.to(torch.float32)
         generated = generated[:, ref_audio_len:, :]
         generated_mel_spec = generated.permute(0, 2, 1)
-        generated_wave = vocos.decode(generated_mel_spec.cpu())
+        generated_wave = vocoder.decode(generated_mel_spec.cpu())
         if rms < target_rms:
             generated_wave = generated_wave * rms / target_rms
 

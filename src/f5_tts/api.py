@@ -15,6 +15,9 @@ from f5_tts.infer.utils_infer import (
     infer_process,
     remove_silence_for_generated_wav,
     save_spectrogram,
+    preprocess_ref_audio_text,
+    target_sample_rate,
+    hop_length,
 )
 
 
@@ -31,10 +34,8 @@ class F5TTS:
     ):
         # Initialize parameters
         self.final_wave = None
-        self.target_sample_rate = 24000
-        self.n_mel_channels = 100
-        self.hop_length = 256
-        self.target_rms = 0.1
+        self.target_sample_rate = target_sample_rate
+        self.hop_length = hop_length
         self.seed = -1
 
         # Set device
@@ -47,7 +48,7 @@ class F5TTS:
         self.load_ema_model(model_type, ckpt_file, vocab_file, ode_method, use_ema)
 
     def load_vocoder_model(self, local_path):
-        self.vocos = load_vocoder(local_path is not None, local_path, self.device)
+        self.vocoder = load_vocoder(local_path is not None, local_path, self.device)
 
     def load_ema_model(self, model_type, ckpt_file, vocab_file, ode_method, use_ema):
         if model_type == "F5-TTS":
@@ -97,11 +98,15 @@ class F5TTS:
             seed = random.randint(0, sys.maxsize)
         seed_everything(seed)
         self.seed = seed
+
+        ref_file, ref_text = preprocess_ref_audio_text(ref_file, ref_text, device=self.device)
+
         wav, sr, spect = infer_process(
             ref_file,
             ref_text,
             gen_text,
             self.ema_model,
+            self.vocoder,
             show_info=show_info,
             progress=progress,
             target_rms=target_rms,
