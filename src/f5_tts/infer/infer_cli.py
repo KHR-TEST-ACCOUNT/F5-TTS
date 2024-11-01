@@ -19,7 +19,6 @@ from f5_tts.infer.utils_infer import (
     remove_silence_for_generated_wav,
 )
 
-
 parser = argparse.ArgumentParser(
     prog="python3 infer-cli.py",
     description="Commandline interface for E2/F5 TTS with Advanced Batch Processing.",
